@@ -37,19 +37,25 @@ def detect_and_crop_face(image_input):
     return face_tensor
 
 
+import torchvision.transforms as transforms
+
+# Same normalization as training
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225])
+])
+
 def preprocess_image(image_input):
-    """
-    Full preprocessing pipeline for a single image
-    Returns normalized tensor ready for model input
-    """
     face = detect_and_crop_face(image_input)
 
     if face is None:
         return None
 
-    face = (face -0.5) / 0.5  # Normalize to [-1,1] range
+    # face is already a tensor [3, 224, 224]
+    face = transform(face)
 
-    # Add batch dimension → shape becomes [1, 3, 224, 224]
+    # Add batch dimension
     face = face.unsqueeze(0)
 
     return face

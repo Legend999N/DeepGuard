@@ -1,14 +1,17 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 import os
 import sys
+import random
 
+# Fix import path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.model import build_model, save_model, device
 
-# ── Transforms ────────────────────────────────────────────────────────────────
+
+# ── Transforms (IMPORTANT: same normalization as inference) ──
 train_transforms = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
@@ -26,39 +29,55 @@ val_transforms = transforms.Compose([
                          [0.229, 0.224, 0.225])
 ])
 
-# ── Dataset Loader ────────────────────────────────────────────────────────────
+
+# ── Dataset Loader ──
 def get_dataloaders(dataset_path, batch_size=8):
+
     train_path = os.path.join(dataset_path, "Train")
     val_path   = os.path.join(dataset_path, "Validation")
 
-    train_dataset = datasets.ImageFolder(train_path, transform=train_transforms)
-    val_dataset   = datasets.ImageFolder(val_path,   transform=val_transforms)
+    train_dataset_full = datasets.ImageFolder(train_path, transform=train_transforms)
+    val_dataset        = datasets.ImageFolder(val_path,   transform=val_transforms)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size,
-                              shuffle=True,  num_workers=0)
+    # 🔥 SUBSET FOR FAST TRAINING (important for your laptop)
+    subset_size = 12000
+    indices = random.sample(range(len(train_dataset_full)), subset_size)
+    train_dataset = Subset(train_dataset_full, indices)
 
-    val_loader   = DataLoader(val_dataset,   batch_size=batch_size,
-                              shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_dataset,
+                              batch_size=batch_size,
+                              shuffle=True,
+                              num_workers=0)
+
+    val_loader = DataLoader(val_dataset,
+                            batch_size=batch_size,
+                            shuffle=False,
+                            num_workers=0)
 
     print(f"Train samples : {len(train_dataset)}")
     print(f"Val samples   : {len(val_dataset)}")
-    print(f"Classes       : {train_dataset.classes}")
 
     return train_loader, val_loader
 
 
-# ── Training Loop ─────────────────────────────────────────────────────────────
-def train_model(dataset_path="Dataset", epochs=3, batch_size=8, lr=1e-4):
+# ── Training Loop ──
+def train_model(dataset_path="Dataset", epochs=5, batch_size=8, lr=5e-5):
 
     print("=" * 50)
-    print("  DeepGuard — Optimized Training 🚀")
+    print("🚀 DeepGuard Training (Optimized for CPU)")
     print("=" * 50)
 
     train_loader, val_loader = get_dataloaders(dataset_path, batch_size)
 
     model = build_model(num_classes=2)
+
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+
+    # 🔥 Only train unfrozen layers (from model.py)
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=lr
+    )
 
     best_val_acc = 0.0
 
@@ -68,14 +87,18 @@ def train_model(dataset_path="Dataset", epochs=3, batch_size=8, lr=1e-4):
         model.train()
         train_loss, train_correct, train_total = 0.0, 0, 0
 
+        print(f"\n📚 Epoch {epoch+1}/{epochs} Training...")
+
         for batch_idx, (images, labels) in enumerate(train_loader):
 
-            if batch_idx > 800:   # 🔥 LIMIT TRAINING
+            # 🔥 LIMIT batches for speed
+            if batch_idx > 600:
                 break
 
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
+
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -90,13 +113,11 @@ def train_model(dataset_path="Dataset", epochs=3, batch_size=8, lr=1e-4):
 
             if (batch_idx + 1) % 20 == 0:
                 acc = 100. * train_correct / train_total
-                print(f"Epoch [{epoch+1}/{epochs}] "
-                      f"Batch [{batch_idx+1}] "
-                      f"Loss: {loss.item():.4f} "
-                      f"Acc: {acc:.1f}%")
+                print(f"Batch [{batch_idx+1}] Loss: {loss.item():.4f} Acc: {acc:.1f}%")
 
         train_acc = 100. * train_correct / train_total
-        avg_loss = train_loss / (batch_idx + 1)   # ✅ FIXED
+        avg_loss = train_loss / (batch_idx + 1)
+
 
         # ── VALIDATION ──
         model.eval()
@@ -107,7 +128,8 @@ def train_model(dataset_path="Dataset", epochs=3, batch_size=8, lr=1e-4):
         with torch.no_grad():
             for batch_idx, (images, labels) in enumerate(val_loader):
 
-                if batch_idx > 200:   # 🔥 LIMIT VALIDATION
+                # 🔥 Limit validation too
+                if batch_idx > 150:
                     break
 
                 images, labels = images.to(device), labels.to(device)
@@ -118,12 +140,13 @@ def train_model(dataset_path="Dataset", epochs=3, batch_size=8, lr=1e-4):
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
 
-                # ✅ Progress print (no freeze feeling)
                 if (batch_idx + 1) % 50 == 0:
                     print(f"Validation Batch {batch_idx+1}")
 
         val_acc = 100. * val_correct / val_total
 
+
+        # ── RESULTS ──
         print("\n" + "=" * 50)
         print(f"Epoch {epoch+1}/{epochs} Results")
         print(f"Train Loss : {avg_loss:.4f}")
@@ -131,21 +154,22 @@ def train_model(dataset_path="Dataset", epochs=3, batch_size=8, lr=1e-4):
         print(f"Val Acc    : {val_acc:.2f}%")
         print("=" * 50)
 
-        # Save best model
+
+        # ── SAVE BEST MODEL ──
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             save_model(model, "models/efficientnet_deepfake.pth")
             print(f"✅ Best model saved! Val Acc: {val_acc:.2f}%\n")
 
-    print("🎉 Training Complete!")
-    print(f"Best Validation Accuracy: {best_val_acc:.2f}%")
+    print("\n🎉 Training Complete!")
+    print(f"🏆 Best Validation Accuracy: {best_val_acc:.2f}%")
 
 
-# ── RUN ───────────────────────────────────────────────────────────────────────
+# ── RUN ──
 if __name__ == "__main__":
     train_model(
         dataset_path="Dataset",
-        epochs=3,
+        epochs=5,
         batch_size=8,
-        lr=1e-4
+        lr=5e-5
     )

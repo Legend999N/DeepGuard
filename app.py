@@ -1,41 +1,47 @@
 import streamlit as st
-from src.model import load_model, predict_frame
-from src.video_utils import extract_frames
-from src.preprocess import detect_and_crop_faces
-from src.utils import get_device
+import cv2
+import numpy as np
+from PIL import Image
 
-st.set_page_config(page_title="DeepGuard", layout="wide")
+from src.model import load_model, predict
+from src.preprocess import preprocess_image
+from src.gradcam import generate_heatmap
 
-st.title("DeepGuard: Deepfake Detection Demo")
-st.write("Upload a video and the app will extract faces and run deepfake detection.")
+# ── Load model once ─────────────────────────────────────────
+@st.cache_resource
+def load_my_model():
+    return load_model()
 
-uploaded_video = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi"])
+model = load_my_model()
 
-if uploaded_video is not None:
-    with st.spinner("Loading model..."):
-        device = get_device()
-        model = load_model("models/efficientnet_deepfake.pth", device)
+# ── UI ──────────────────────────────────────────────────────
+st.set_page_config(page_title="DeepGuard", layout="centered")
 
-    st.video(uploaded_video)
+st.title("🛡️ DeepGuard — Deepfake Detection")
+st.write("Upload an image to detect if it's REAL or FAKE")
 
-    with st.spinner("Extracting frames..."):
-        frames = extract_frames(uploaded_video, every_n_frames=15, max_frames=10)
+uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
-    if not frames:
-        st.warning("Could not extract frames from the uploaded video.")
+# ── Process Image ───────────────────────────────────────────
+if uploaded_file is not None:
+
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded Image", use_container_width=True)
+
+    # Preprocess
+    tensor = preprocess_image(image)
+
+    if tensor is None:
+        st.error("❌ No face detected")
     else:
-        st.write(f"Analyzing {len(frames)} key frames...")
-        results = []
-        for idx, frame in enumerate(frames, start=1):
-            crops = detect_and_crop_faces(frame)
-            if not crops:
-                continue
-            for crop in crops:
-                score, label = predict_frame(crop, model, device)
-                results.append((idx, label, score))
+        # Prediction
+        label, confidence, _ = predict(model, tensor)
 
-        if results:
-            for frame_index, label, score in results:
-                st.write(f"Frame {frame_index}: **{label}** ({score:.3f})")
-        else:
-            st.info("No faces were detected in the selected video frames.")
+        st.subheader(f"Prediction: {label}")
+        st.write(f"Confidence: {confidence:.2f}%")
+
+        # Heatmap
+        heatmap = generate_heatmap(model, tensor)
+
+        st.subheader("🔥 Heatmap (Model Attention)")
+        st.image(heatmap, caption="Grad-CAM Output", use_container_width=True)

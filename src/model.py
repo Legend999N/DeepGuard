@@ -1,44 +1,44 @@
 import torch
 import torch.nn as nn
-from torchvision import models
+from efficientnet_pytorch import EfficientNet
 
 # ── Device setup ──────────────────────────────────────────────────────────────
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
 
+# ── Build Model ───────────────────────────────────────────────────────────────
 def build_model(num_classes=2):
     """
-    Loads pretrained EfficientNet-B0 and modifies
-    it for binary classification (Real vs Fake)
+    Load EfficientNet-B0 pretrained model and modify for binary classification
     """
 
-    # Load pretrained EfficientNet-B0
-    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
-    print("Loaded pretrained EfficientNet-B0")
+    model = EfficientNet.from_pretrained('efficientnet-b0')
 
-    # Freeze all layers
-    for param in model.parameters():
-        param.requires_grad = False
-
-    # Replace classifier
-    in_features = model.classifier[1].in_features
-    model.classifier[1] = nn.Sequential(
-        nn.Dropout(p=0.3),
+    # Replace final layer
+    in_features = model._fc.in_features
+    model._fc = nn.Sequential(
+        nn.Dropout(p=0.4),
         nn.Linear(in_features, num_classes)
     )
 
-    # Unfreeze only classifier
-    for param in model.classifier.parameters():
+    # 🔥 Freeze all layers
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # 🔥 Train only classifier
+    for param in model._fc.parameters():
         param.requires_grad = True
 
-    return model.to(device)
+    model = model.to(device)
+    return model
 
 
+# ── Prediction Function ────────────────────────────────────────────────────────
 def predict(model, face_tensor):
     """
-    Takes a preprocessed face tensor [1, 3, 224, 224]
-    Returns predicted label and confidence score
+    Input: face tensor [1, 3, 224, 224]
+    Output: label + confidence + probabilities
     """
     model.eval()
 
@@ -49,17 +49,20 @@ def predict(model, face_tensor):
         probabilities = torch.softmax(outputs, dim=1)
         confidence, predicted = torch.max(probabilities, 1)
 
-        label = "REAL" if predicted.item() == 0 else "FAKE"
+        # 🔥 IMPORTANT FIX (label mapping)
+        label = "FAKE" if predicted.item() == 0 else "REAL"
         confidence_pct = confidence.item() * 100
 
     return label, confidence_pct, probabilities
 
 
+# ── Save Model ─────────────────────────────────────────────────────────────────
 def save_model(model, path="models/efficientnet_deepfake.pth"):
     torch.save(model.state_dict(), path)
     print(f"Model saved to {path}")
 
 
+# ── Load Model ─────────────────────────────────────────────────────────────────
 def load_model(path="models/efficientnet_deepfake.pth"):
     model = build_model()
     model.load_state_dict(torch.load(path, map_location=device))
@@ -68,7 +71,7 @@ def load_model(path="models/efficientnet_deepfake.pth"):
     return model
 
 
-# ── Quick test when run directly ──────────────────────────────────────────────
+# ── Test Run ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import os
     import sys
@@ -76,16 +79,16 @@ if __name__ == "__main__":
     from src.preprocess import preprocess_image
 
     print("=" * 45)
-    print("  Loading EfficientNet-B0 pretrained model...")
+    print("  Loading EfficientNet-B0 model...")
     print("=" * 45)
 
     model = build_model()
 
     print(f"\n✅ Model loaded successfully!")
-    print(f"   Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"   Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     # Test on sample images
-    test_images = [
+    test_folders = [
         ("Dataset/Train/Real", "REAL"),
         ("Dataset/Train/Fake", "FAKE"),
     ]
@@ -94,26 +97,28 @@ if __name__ == "__main__":
     print("  Running inference on sample images...")
     print("=" * 45)
 
-    for folder, true_label in test_images:
+    for folder, true_label in test_folders:
         images = os.listdir(folder)[:3]
+
         print(f"\nFolder: {folder}")
         print("-" * 45)
 
         for img_name in images:
             img_path = os.path.join(folder, img_name)
-            tensor = preprocess_image(img_path)
 
+            tensor = preprocess_image(img_path)
             if tensor is None:
                 print(f"❌ {img_name} → No face detected")
                 continue
 
-            label, confidence, _ = predict(model, tensor)
-            status = "✅" if label == true_label else "⚠️"
+            label, confidence, probs = predict(model, tensor)
 
+            status = "✅" if label == true_label else "⚠️"
             print(f"{status} {img_name}")
-            print(f"   Predicted: {label}  |  Confidence: {confidence:.1f}%")
+            print(f"   Predicted: {label} | Confidence: {confidence:.1f}%")
             print(f"   True label: {true_label}")
+            print(f"   Raw probs: {probs}")
 
     print("\n" + "=" * 45)
-    print("✅ Model ready!")
+    print("✅ Model check complete!")
     print("=" * 45)
