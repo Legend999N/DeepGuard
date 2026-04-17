@@ -22,11 +22,15 @@ def build_model(num_classes=2):
         nn.Linear(in_features, num_classes)
     )
 
-    # 🔥 Freeze all layers
+    # Freeze early layers only
     for param in model.parameters():
         param.requires_grad = False
 
-    # 🔥 Train only classifier
+    # Unfreeze last 3 blocks (not 2)
+    for param in model._blocks[-3:].parameters():
+        param.requires_grad = True
+
+    # Unfreeze classifier
     for param in model._fc.parameters():
         param.requires_grad = True
 

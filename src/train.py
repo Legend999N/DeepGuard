@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.model import build_model, save_model, device
 
 
-# ── Transforms (IMPORTANT: same normalization as inference) ──
+# ── Transforms ──
 train_transforms = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
@@ -37,10 +37,10 @@ def get_dataloaders(dataset_path, batch_size=8):
     val_path   = os.path.join(dataset_path, "Validation")
 
     train_dataset_full = datasets.ImageFolder(train_path, transform=train_transforms)
-    val_dataset        = datasets.ImageFolder(val_path,   transform=val_transforms)
+    val_dataset        = datasets.ImageFolder(val_path, transform=val_transforms)
 
-    # 🔥 SUBSET FOR FAST TRAINING (important for your laptop)
-    subset_size = 12000
+    # 🔥 SAFE SUBSET (won’t crash if dataset smaller)
+    subset_size = min(18000, len(train_dataset_full))
     indices = random.sample(range(len(train_dataset_full)), subset_size)
     train_dataset = Subset(train_dataset_full, indices)
 
@@ -61,10 +61,10 @@ def get_dataloaders(dataset_path, batch_size=8):
 
 
 # ── Training Loop ──
-def train_model(dataset_path="Dataset", epochs=5, batch_size=8, lr=5e-5):
+def train_model(dataset_path="Dataset", epochs=8, batch_size=8, lr=3e-5):
 
     print("=" * 50)
-    print("🚀 DeepGuard Training (Optimized for CPU)")
+    print("🚀 DeepGuard Training (Improved Version)")
     print("=" * 50)
 
     train_loader, val_loader = get_dataloaders(dataset_path, batch_size)
@@ -73,7 +73,7 @@ def train_model(dataset_path="Dataset", epochs=5, batch_size=8, lr=5e-5):
 
     criterion = nn.CrossEntropyLoss()
 
-    # 🔥 Only train unfrozen layers (from model.py)
+    # 🔥 Train only unfrozen layers
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=lr
@@ -91,8 +91,8 @@ def train_model(dataset_path="Dataset", epochs=5, batch_size=8, lr=5e-5):
 
         for batch_idx, (images, labels) in enumerate(train_loader):
 
-            # 🔥 LIMIT batches for speed
-            if batch_idx > 600:
+            # 🔥 Balanced limit (better learning than 600)
+            if batch_idx > 1000:
                 break
 
             images, labels = images.to(device), labels.to(device)
@@ -128,8 +128,7 @@ def train_model(dataset_path="Dataset", epochs=5, batch_size=8, lr=5e-5):
         with torch.no_grad():
             for batch_idx, (images, labels) in enumerate(val_loader):
 
-                # 🔥 Limit validation too
-                if batch_idx > 150:
+                if batch_idx > 200:
                     break
 
                 images, labels = images.to(device), labels.to(device)
@@ -169,7 +168,7 @@ def train_model(dataset_path="Dataset", epochs=5, batch_size=8, lr=5e-5):
 if __name__ == "__main__":
     train_model(
         dataset_path="Dataset",
-        epochs=5,
+        epochs=12,
         batch_size=8,
-        lr=5e-5
+        lr=3e-5
     )
